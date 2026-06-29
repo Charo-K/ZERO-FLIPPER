@@ -385,35 +385,50 @@ function resolveSlings() {
     for (const s of slings) {
         if (s.flash > 0) s.flash--;
         const v = s.verts;
-        // Check all 3 sides of the triangle
-        const sides = [
-            [v[0].x,v[0].y, v[1].x,v[1].y],
-            [v[1].x,v[1].y, v[2].x,v[2].y],
-            [v[2].x,v[2].y, v[0].x,v[0].y],
-        ];
-        for (const [ax,ay,bx,by] of sides) {
-            const cp = closestPtOnSeg(ball.x, ball.y, ax, ay, bx, by);
-            const dx=ball.x-cp.x, dy=ball.y-cp.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist < BALL_R && dist > 0) {
-                const nx=dx/dist, ny=dy/dist;
-                // Vertical back faces are one-sided: only deflect from the field side.
-                // Left sling (ax=111 < 360): skip if ball is in pocket (nx<0, to the left).
-                // Right sling (ax=607 > 360): skip if ball is in pocket (nx>0, to the right).
-                if (ax===bx && ((ax<360 && nx<0)||(ax>360 && nx>0))) continue;
-                ball.x = cp.x + nx*(BALL_R+1);
-                ball.y = cp.y + ny*(BALL_R+1);
-                const dot = ball.vx*nx + ball.vy*ny;
-                if (dot < 0) {
-                    // Strong kick away from sling
-                    const spd = Math.max(Math.hypot(ball.vx, ball.vy), 7);
-                    ball.vx = nx*spd*1.3;
-                    ball.vy = ny*spd*1.3;
-                    score += s.pts;
-                    s.flash = 12; SFX.sling();
-                }
-                break;
-            }
+        const ax=v[0].x,ay=v[0].y, bx=v[1].x,by=v[1].y, cx=v[2].x,cy=v[2].y;
+        const centX=(ax+bx+cx)/3, centY=(ay+by+cy)/3;
+
+        const sides = [[ax,ay,bx,by],[bx,by,cx,cy],[cx,cy,ax,ay]];
+
+        // Outward unit normal for each side: perpendicular pointing away from centroid
+        const norms = sides.map(([x1,y1,x2,y2]) => {
+            const edx=x2-x1, edy=y2-y1, len=Math.hypot(edx,edy);
+            const mx=(x1+x2)/2, my=(y1+y2)/2;
+            let nx=edy/len, ny=-edx/len;
+            if (nx*(centX-mx)+ny*(centY-my) > 0) { nx=-nx; ny=-ny; }
+            return [nx,ny];
+        });
+
+        // Signed distance from ball to each face plane (positive = outside that face)
+        const sd = sides.map(([x1,y1],i) => (ball.x-x1)*norms[i][0]+(ball.y-y1)*norms[i][1]);
+
+        // SAT: ball is clearly outside if any signed distance > BALL_R
+        if (sd.some(d => d > BALL_R)) continue;
+
+        // Find face with maximum sd — nearest exit regardless of whether ball is
+        // approaching from outside or fully trapped inside the triangle
+        let best=0;
+        if (sd[1]>sd[best]) best=1;
+        if (sd[2]>sd[best]) best=2;
+
+        const [nx,ny]=norms[best];
+
+        // Back face (vertical edge) is one-sided: if ball is on the outward/pocket
+        // side (sd > 0), let it pass rather than deflecting it back into the pocket
+        if (sides[best][0]===sides[best][2] && sd[best]>0) continue;
+
+        // Push ball to just outside the chosen face
+        const pen = BALL_R - sd[best];
+        ball.x += nx*(pen+1);
+        ball.y += ny*(pen+1);
+
+        const dot = ball.vx*nx + ball.vy*ny;
+        if (dot < 0) {
+            const spd = Math.max(Math.hypot(ball.vx, ball.vy), 7);
+            ball.vx = nx*spd*1.3;
+            ball.vy = ny*spd*1.3;
+            score += s.pts;
+            s.flash = 12; SFX.sling();
         }
     }
 }
